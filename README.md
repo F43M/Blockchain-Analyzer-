@@ -49,7 +49,7 @@ See the file for all available options.
 Start the application with:
 
 ```bash
-python BlockchainAnalyzer.py
+python main.py
 ```
 
 The dashboard will be available at `http://localhost:8000/` and loads the configuration from `blockchain_analyzer/module_config.yaml`.
