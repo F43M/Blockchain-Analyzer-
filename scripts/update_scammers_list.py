@@ -14,9 +14,9 @@ def main():
         resp.raise_for_status()
         with open(OUTPUT_FILE, "w") as f:
             json.dump(resp.json(), f, indent=2)
-        print(f"Updated scammer list at {OUTPUT_FILE}")
+        print(f"Lista de golpistas atualizada em {OUTPUT_FILE}")
     except Exception as e:
-        print(f"Failed to update scammer list: {e}")
+        print(f"Falha ao atualizar a lista de golpistas: {e}")
 
 if __name__ == "__main__":
     main()
