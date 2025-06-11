@@ -9,6 +9,7 @@ Blockchain Analyzer is a proof of concept for monitoring blockchain activity and
 * Watchlists for addresses or contracts
 * Alerts through Discord, Telegram or email
 * FastAPI based web dashboard
+* Works entirely via RPC/Web3 without the need for external scan APIs
 
 ## Installation
 
@@ -22,15 +23,13 @@ pip install -r requirements.txt
 
 ## Configuration
 
-All settings live in `blockchain_analyzer/module_config.yaml`. Update RPC endpoints, API keys and alert channels to match your environment. Below is a shortened example:
+All settings live in `blockchain_analyzer/module_config.yaml`. Update RPC endpoints and alert channels to match your environment. Below is a shortened example:
 
 ```yaml
 blockchains:
   ethereum:
     rpc_endpoints:
       - "https://mainnet.infura.io/v3/YOUR_API_KEY"
-    scan_api: "https://api.etherscan.io/api"
-    scan_api_key: "YOUR_ETHERSCAN_KEY"
     chain_id: 1
 alerts:
   discord_webhook: ""
