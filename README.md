@@ -53,6 +53,17 @@ python main.py
 
 The dashboard will be available at `http://localhost:8000/` and loads the configuration from `blockchain_analyzer/module_config.yaml`.
 
+## Updating scammer list
+
+The file `data/multichain.json` contains known scammer addresses used by the
+tracker. To update it with the latest version from the upstream repository run:
+
+```bash
+python scripts/update_scammers_list.py
+```
+
+This step is optional and requires internet access.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
