@@ -1,0 +1,44 @@
+blockchains:
+  ethereum:
+    rpc_endpoints:
+      - "https://mainnet.infura.io/v3/YOUR_API_KEY"
+    scan_api: "https://api.etherscan.io/api"
+    scan_api_key: "YOUR_ETHERSCAN_KEY"
+    chain_id: 1
+    priority: 1
+    enabled: true
+alerts:
+  discord_webhook: ""
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  email_alerts:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    email_from: ""
+    email_password: ""
+    email_to: ""
+risk_thresholds:
+  whale_threshold_eth: 10.0
+  min_swap_amount_eth: 1.0
+  risk_threshold: 0.1
+  early_adopter_window: 100
+  high_risk_score: 7.0
+  moderate_risk_score: 4.0
+machine_learning:
+  contamination: 0.1
+  random_state: 42
+  model_path: "ml_models/behavior_model.joblib"
+  scaler_path: "ml_models/behavior_scaler.joblib"
+  retrain_interval: 86400
+# Diretórios
+data_dir: "token_data"
+cache_dir: "cache"
+models_dir: "ml_models"
+# Desempenho
+performance:
+  max_retries: 3
+  retry_delay: 1.0
+  timeout: 30.0
+  max_connections: 10
+  cache_ttl: 3600
