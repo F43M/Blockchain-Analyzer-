@@ -7,7 +7,7 @@ from .blockchain import BlockchainConnector
 
 
 class BlockScanner:
-    """Utility class to sequentially scan blockchain blocks and persist state."""
+    """Classe utilitária para escanear blocos da blockchain sequencialmente e persistir o estado."""
 
     def __init__(self, connector: BlockchainConnector, state_file: str = "data/scan_state.json"):
         self.connector = connector
@@ -15,7 +15,7 @@ class BlockScanner:
         self._lock = asyncio.Lock()
 
     async def get_saved_block(self) -> int:
-        """Return last saved block for current chain or 0 if none."""
+        """Retorna o último bloco salvo para a cadeia atual ou 0 se não houver."""
         if os.path.exists(self.state_file):
             try:
                 with open(self.state_file, "r") as f:
@@ -40,7 +40,7 @@ class BlockScanner:
                 json.dump(state, f)
 
     async def scan(self, start_block: Optional[int] = None) -> AsyncGenerator[dict, None]:
-        """Iterate over blocks starting from ``start_block`` until latest."""
+        """Itera sobre os blocos a partir de ``start_block`` até o mais recente."""
         if start_block is None:
             start_block = await self.get_saved_block()
         latest = await self.connector.async_w3.eth.block_number
