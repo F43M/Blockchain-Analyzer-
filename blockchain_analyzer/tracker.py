@@ -53,6 +53,7 @@ from .config import ModuleConfig
 from .blockchain import BlockchainConnector, AlertSystem
 from .analysis import TokenAnalyzer, DexAnalyzer, AIBehaviorEngine
 from .utils import Utils, trace
+from .block_scanner import BlockScanner
 
 # ==============================================
 # Módulo: MemeCoin Tracker
@@ -68,6 +69,7 @@ class MemeCoinTracker:
         self.token_analyzer = TokenAnalyzer(self.connector)
         self.dex_analyzer = DexAnalyzer(self.connector)
         self.ai_engine = AIBehaviorEngine()
+        self.block_scanner = BlockScanner(self.connector)
         
         # Caches e armazenamentos
         self.token_cache = {}
@@ -381,44 +383,70 @@ class MemeCoinTracker:
         pools = await self.token_analyzer.get_liquidity_pools(token_address)
         if not pools:
             return []
-        
-        trades = []
+
+        pool_info = {}
         for pool_address in pools:
             try:
-                pool_contract = await self.connector.get_contract(pool_address)
-                swap_events = await pool_contract.events.Swap.get_logs(fromBlock='earliest')
-                
-                for event in swap_events:
-                    tx_receipt = await self.connector.get_transaction_receipt(event['transactionHash'])
-                    block = await self.connector.get_block(event['blockNumber'])
-                    
-                    if token_address.lower() == event['args']['token0'].lower():
-                        amount = int(event['args']['amount0In']) - int(event['args']['amount0Out'])
-                        price = abs(int(event['args']['amount1Out']) / int(event['args']['amount0In'])) if int(event['args']['amount0In']) > 0 else None
-                    else:
-                        amount = int(event['args']['amount1In']) - int(event['args']['amount1Out'])
-                        price = abs(int(event['args']['amount0Out']) / int(event['args']['amount1In'])) if int(event['args']['amount1In']) > 0 else None
-                    
-                    if price:
-                        trades.append({
-                            'from': tx_receipt['from'],
-                            'to': tx_receipt['to'],
-                            'amount': str(abs(amount)),
-                            'price': float(price),
-                            'timestamp': block['timestamp'],
-                            'tx_hash': event['transactionHash'].hex()
-                        })
+                contract = await self.connector.get_contract(pool_address)
+                token0 = await contract.functions.token0().call()
+                token1 = await contract.functions.token1().call()
+                pool_info[pool_address] = (contract, token0, token1)
             except Exception as e:
                 trace.log_event(
                     "TRADE_FETCH",
                     "ERROR",
-                    {
-                        "pool": pool_address,
-                        "error": str(e)
-                    }
+                    {"pool": pool_address, "error": str(e)}
                 )
                 continue
-        
+
+        trades = []
+        start_block = await self.block_scanner.get_saved_block()
+        swap_topic = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
+
+        async for block in self.block_scanner.scan(start_block):
+            tx_hashes = [h.hex() if isinstance(h, bytes) else h for h in block['transactions']]
+            receipts = await asyncio.gather(
+                *[self.connector.get_transaction_receipt(h) for h in tx_hashes],
+                return_exceptions=True
+            )
+            for receipt in receipts:
+                if isinstance(receipt, Exception):
+                    continue
+                for log in receipt['logs']:
+                    if log['address'] in pool_info and len(log['topics']) > 0 and log['topics'][0].hex() == swap_topic:
+                        contract, token0, token1 = pool_info[log['address']]
+                        try:
+                            event = contract.events.Swap().process_log(log)
+                            if token_address.lower() == token0.lower():
+                                amount = int(event['args']['amount0In']) - int(event['args']['amount0Out'])
+                                price = (
+                                    abs(int(event['args']['amount1Out']) / int(event['args']['amount0In']))
+                                    if int(event['args']['amount0In']) > 0 else None
+                                )
+                            else:
+                                amount = int(event['args']['amount1In']) - int(event['args']['amount1Out'])
+                                price = (
+                                    abs(int(event['args']['amount0Out']) / int(event['args']['amount1In']))
+                                    if int(event['args']['amount1In']) > 0 else None
+                                )
+
+                            if price is not None:
+                                trades.append({
+                                    'from': receipt['from'],
+                                    'to': receipt['to'],
+                                    'amount': str(abs(amount)),
+                                    'price': float(price),
+                                    'timestamp': block['timestamp'],
+                                    'tx_hash': receipt['transactionHash'].hex()
+                                })
+                        except Exception as e:
+                            trace.log_event(
+                                "TRADE_FETCH",
+                                "ERROR",
+                                {"pool": log['address'], "error": str(e)}
+                            )
+                            continue
+
         return trades
     
     @trace.trace_operation
@@ -553,21 +581,34 @@ class MemeCoinTracker:
         """Varre blocos recentes em busca de outros contratos do mesmo deployer."""
         try:
             contracts = []
-            latest = await self.connector.async_w3.eth.block_number
-            start_block = max(0, latest - 10000)
+            start_block = await self.block_scanner.get_saved_block()
 
-            for block_num in range(start_block, latest + 1):
-                block = await self.connector.get_block(block_num)
-                for th in block['transactions']:
-                    tx = await self.connector.get_transaction(th.hex() if isinstance(th, bytes) else th)
+            async for block in self.block_scanner.scan(start_block):
+                tx_hashes = [h.hex() if isinstance(h, bytes) else h for h in block['transactions']]
+                txs = await asyncio.gather(
+                    *[self.connector.get_transaction(h) for h in tx_hashes],
+                    return_exceptions=True
+                )
+
+                receipt_tasks = []
+                valid_hashes = []
+                for th, tx in zip(tx_hashes, txs):
+                    if isinstance(tx, Exception):
+                        continue
                     if tx['from'].lower() == deployer_address.lower() and tx['to'] is None:
-                        receipt = await self.connector.get_transaction_receipt(th.hex() if isinstance(th, bytes) else th)
-                        if receipt.contractAddress:
-                            contracts.append({
-                                'contract_address': receipt.contractAddress,
-                                'timestamp': int(block['timestamp']),
-                                'tx_hash': th.hex() if isinstance(th, bytes) else th,
-                            })
+                        receipt_tasks.append(self.connector.get_transaction_receipt(th))
+                        valid_hashes.append(th)
+
+                receipts = await asyncio.gather(*receipt_tasks, return_exceptions=True)
+                for th, receipt in zip(valid_hashes, receipts):
+                    if isinstance(receipt, Exception):
+                        continue
+                    if getattr(receipt, 'contractAddress', None):
+                        contracts.append({
+                            'contract_address': receipt.contractAddress,
+                            'timestamp': int(block['timestamp']),
+                            'tx_hash': th,
+                        })
                 if len(contracts) >= 10:
                     break
 
@@ -748,23 +789,27 @@ class MemeCoinTracker:
             'tokens_dumped': False
         }
         
-        # Obter transações regulares varrendo blocos recentes via RPC
-        latest = await self.connector.async_w3.eth.block_number
-        start_block = max(0, latest - 10000)
+        # Obter transações regulares varrendo blocos via BlockScanner
+        start_block = await self.block_scanner.get_saved_block()
 
-        for block_num in range(start_block, latest + 1):
-            block = await self.connector.get_block(block_num)
-            for th in block['transactions']:
-                tx = await self.connector.get_transaction(th.hex() if isinstance(th, bytes) else th)
+        async for block in self.block_scanner.scan(start_block):
+            tx_hashes = [h.hex() if isinstance(h, bytes) else h for h in block['transactions']]
+            txs = await asyncio.gather(
+                *[self.connector.get_transaction(h) for h in tx_hashes],
+                return_exceptions=True
+            )
+            for th, tx in zip(tx_hashes, txs):
+                if isinstance(tx, Exception):
+                    continue
                 if tx['from'].lower() == wallet_address.lower() or (
                     tx.get('to') and tx['to'].lower() == wallet_address.lower()
                 ):
                     history['transactions'].append({
-                        'hash': th.hex() if isinstance(th, bytes) else th,
+                        'hash': th,
                         'from': tx['from'],
                         'to': tx.get('to'),
                         'value': str(tx['value']),
-                        'blockNumber': block_num,
+                        'blockNumber': block['number'],
                     })
         
         # Verificar se é implementador
