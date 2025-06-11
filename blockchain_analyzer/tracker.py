@@ -200,11 +200,12 @@ class MemeCoinTracker:
         self.watched_wallets.add(Web3.to_checksum_address(wallet_address))
     
     def _load_known_scammers(self) -> Set[str]:
-        """Carrega endereços de scammers conhecidos"""
+        """Carrega endereços de scammers conhecidos a partir de arquivo local."""
         try:
-            response = requests.get("https://raw.githubusercontent.com/scam-alert/scam-addresses/main/multichain.json")
-            if response.status_code == 200:
-                data = response.json()
+            data_file = Path(__file__).resolve().parents[1] / "data" / "multichain.json"
+            if data_file.exists():
+                with open(data_file, "r") as f:
+                    data = json.load(f)
                 return set(data.get(self.chain, []))
         except Exception as e:
             trace.log_event(
