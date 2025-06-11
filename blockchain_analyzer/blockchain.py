@@ -221,18 +221,50 @@ class BlockchainConnector:
         return None
     
     async def _fetch_abi_from_scan(self, address: str) -> Optional[List[Dict]]:
-        """Busca a ABI de um contrato usando a API do scan"""
-        if not self.chain_config.scan_api or not self.chain_config.scan_api_key:
-            return None
-        
-        url = f"{self.chain_config.scan_api}?module=contract&action=getabi&address={address}&apikey={self.chain_config.scan_api_key}"
-        
-        async with aiohttp.ClientSession() as session:
-            data = await Utils.fetch_with_retry(session, url)
-            if data and data.get('status') == '1':
-                return json.loads(data['result'])
-        
-        return None
+        """Tenta identificar uma ABI padrão via RPC.
+
+        Caso não seja possível determinar o ABI completo, retorna uma
+        estrutura mínima contendo apenas as funções ``name``, ``symbol`` e
+        ``decimals`` para interagir com tokens ERC‑20 compatíveis.
+        """
+
+        minimal_abi = [
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "name",
+                "outputs": [{"name": "", "type": "string"}],
+                "type": "function",
+            },
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "symbol",
+                "outputs": [{"name": "", "type": "string"}],
+                "type": "function",
+            },
+            {
+                "constant": True,
+                "inputs": [],
+                "name": "decimals",
+                "outputs": [{"name": "", "type": "uint8"}],
+                "type": "function",
+            },
+        ]
+
+        w3 = self.async_w3_pool[0]
+        contract = w3.eth.contract(address=Web3.to_checksum_address(address), abi=minimal_abi)
+
+        try:
+            # Testa se o contrato responde às chamadas padrão
+            await contract.functions.name().call()
+            await contract.functions.symbol().call()
+            await contract.functions.decimals().call()
+            return minimal_abi
+        except Exception:
+            # Mesmo que as chamadas falhem, retorna o ABI mínimo para permitir
+            # interações básicas quando possível
+            return minimal_abi
     
     @trace.trace_operation
     async def listen_for_pending_transactions(self, callback: callable):

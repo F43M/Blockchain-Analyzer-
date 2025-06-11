@@ -453,26 +453,36 @@ class MemeCoinTracker:
     async def _get_contract_deployer(self, token_address: str) -> str:
         """Obtém o endereço do implementador do contrato"""
         try:
-            # Primeiro verifica se já temos essa informação
+            # Primeiro verifica se já temos essa informação em cache
             if token_address in self.deployers:
                 return self.deployers[token_address]
-            
-            # Tenta obter via código do contrato
-            code = await self.connector.async_w3.eth.get_code(token_address)
-            if code:
-                tx_hash = code['transactionHash']
+
+            transfer_sig = Web3.keccak(text="Transfer(address,address,uint256)").hex()
+            logs = await self.connector.async_w3.eth.get_logs({
+                'fromBlock': 0,
+                'toBlock': 'latest',
+                'address': Web3.to_checksum_address(token_address),
+                'topics': [transfer_sig]
+            })
+
+            if logs:
+                tx_hash = logs[0]['transactionHash'].hex()
                 tx = await self.connector.get_transaction(tx_hash)
                 return tx['from']
-            
-            # Se não conseguir, tenta via API do scan
-            if self.connector.chain_config.scan_api:
-                url = f"{self.connector.chain_config.scan_api}?module=contract&action=getcontractcreation&contractaddresses={token_address}&apikey={self.connector.chain_config.scan_api_key}"
-                
-                async with aiohttp.ClientSession() as session:
-                    data = await Utils.fetch_with_retry(session, url)
-                    if data and data.get('status') == '1' and data.get('result'):
-                        return data['result'][0]['contractCreator']
-            
+
+            # Fallback: varre os últimos blocos em busca da transação de criação
+            latest = await self.connector.async_w3.eth.block_number
+            start_block = max(0, latest - 10000)
+
+            for block_num in range(start_block, latest + 1):
+                block = await self.connector.get_block(block_num)
+                for th in block['transactions']:
+                    tx = await self.connector.get_transaction(th.hex() if isinstance(th, bytes) else th)
+                    if tx['to'] is None:
+                        receipt = await self.connector.get_transaction_receipt(th.hex() if isinstance(th, bytes) else th)
+                        if receipt.contractAddress and receipt.contractAddress.lower() == token_address.lower():
+                            return tx['from']
+
             return '0xUnknownDeployer'
         except Exception as e:
             trace.log_event(
@@ -539,26 +549,38 @@ class MemeCoinTracker:
         }
     
     async def _check_other_deploys(self, deployer_address: str) -> List[Dict]:
-        """Verifica outros contratos implementados pelo mesmo endereço"""
-        if not self.connector.chain_config.scan_api or not self.connector.chain_config.scan_api_key:
+        """Varre blocos recentes em busca de outros contratos do mesmo deployer."""
+        try:
+            contracts = []
+            latest = await self.connector.async_w3.eth.block_number
+            start_block = max(0, latest - 10000)
+
+            for block_num in range(start_block, latest + 1):
+                block = await self.connector.get_block(block_num)
+                for th in block['transactions']:
+                    tx = await self.connector.get_transaction(th.hex() if isinstance(th, bytes) else th)
+                    if tx['from'].lower() == deployer_address.lower() and tx['to'] is None:
+                        receipt = await self.connector.get_transaction_receipt(th.hex() if isinstance(th, bytes) else th)
+                        if receipt.contractAddress:
+                            contracts.append({
+                                'contract_address': receipt.contractAddress,
+                                'timestamp': int(block['timestamp']),
+                                'tx_hash': th.hex() if isinstance(th, bytes) else th,
+                            })
+                if len(contracts) >= 10:
+                    break
+
+            return contracts
+        except Exception as e:
+            trace.log_event(
+                "DEPLOYER_HISTORY",
+                "ERROR",
+                {
+                    "deployer": deployer_address,
+                    "error": str(e)
+                }
+            )
             return []
-        
-        url = f"{self.connector.chain_config.scan_api}?module=account&action=txlist&address={deployer_address}&startblock=0&endblock=99999999&sort=asc&apikey={self.connector.chain_config.scan_api_key}"
-        
-        async with aiohttp.ClientSession() as session:
-            data = await Utils.fetch_with_retry(session, url)
-            if data and data.get('status') == '1':
-                contracts = []
-                for tx in data.get('result', []):
-                    if tx.get('to') == '' and tx.get('isError') == '0':
-                        contracts.append({
-                            'contract_address': tx.get('contractAddress'),
-                            'timestamp': int(tx.get('timeStamp', 0)),
-                            'tx_hash': tx.get('hash')
-                        })
-                return contracts
-        
-        return []
     
     async def _assess_deployer_risk(self, deployer_address: str, token_address: str) -> List[str]:
         """Avalia os riscos associados ao implementador"""
@@ -725,14 +747,24 @@ class MemeCoinTracker:
             'tokens_dumped': False
         }
         
-        # Obter transações regulares
-        if self.connector.chain_config.scan_api:
-            url = f"{self.connector.chain_config.scan_api}?module=account&action=txlist&address={wallet_address}&startblock=0&endblock=99999999&sort=asc&apikey={self.connector.chain_config.scan_api_key}"
-            
-            async with aiohttp.ClientSession() as session:
-                data = await Utils.fetch_with_retry(session, url)
-                if data and data.get('status') == '1':
-                    history['transactions'] = data.get('result', [])
+        # Obter transações regulares varrendo blocos recentes via RPC
+        latest = await self.connector.async_w3.eth.block_number
+        start_block = max(0, latest - 10000)
+
+        for block_num in range(start_block, latest + 1):
+            block = await self.connector.get_block(block_num)
+            for th in block['transactions']:
+                tx = await self.connector.get_transaction(th.hex() if isinstance(th, bytes) else th)
+                if tx['from'].lower() == wallet_address.lower() or (
+                    tx.get('to') and tx['to'].lower() == wallet_address.lower()
+                ):
+                    history['transactions'].append({
+                        'hash': th.hex() if isinstance(th, bytes) else th,
+                        'from': tx['from'],
+                        'to': tx.get('to'),
+                        'value': str(tx['value']),
+                        'blockNumber': block_num,
+                    })
         
         # Verificar se é implementador
         for token, deployer in self.deployers.items():
