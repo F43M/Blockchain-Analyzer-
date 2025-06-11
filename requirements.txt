@@ -1,0 +1,17 @@
+PyYAML
+aiohttp
+aioredis
+joblib
+numpy
+pandas
+requests
+websockets
+web3
+scikit-learn
+fastapi
+uvicorn
+python-telegram-bot
+discord-webhook
+cryptography
+pydantic
+pytz
