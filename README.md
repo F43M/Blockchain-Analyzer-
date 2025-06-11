@@ -45,11 +45,14 @@ See the file for all available options.
 
 ## Running
 
-Start the application with:
+Run the web dashboard with:
 
 ```bash
-python main.py
+python -m blockchain_analyzer.webapp
 ```
+
+The provided `main.py` simply calls this module for convenience and can also be
+used to start the application.
 
 The dashboard will be available at `http://localhost:8000/` and loads the configuration from `blockchain_analyzer/module_config.yaml`.
 
